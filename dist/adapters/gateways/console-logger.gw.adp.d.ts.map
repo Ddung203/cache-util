@@ -1,0 +1,1 @@
+{"version":3,"file":"console-logger.gw.adp.d.ts","sourceRoot":"","sources":["../../../src/adapters/gateways/console-logger.gw.adp.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,mBAAmB,EAAE,MAAM,iBAAiB,CAAC;AAMtD,qBAAa,kBAAmB,SAAQ,mBAAmB;IACzD,OAAO,CAAC,QAAQ,CAAC,IAAI,CAAgC;IAErD,GAAG,CAAC,OAAO,EAAE,MAAM,EAAE,OAAO,EAAE,MAAM,GAAG,IAAI;CAI5C"}
