@@ -23,13 +23,10 @@ export class CachingManagerControllerAdp {
     try {
       const fetchDataUseCase = this.buildFetchDataUseCase(fetchDataPromise);
 
-      // Use the first cache adapter as primary
-      const primaryCacheAdapter = this.cacheGwAdapters[0];
-
       const cacheUseCase = new CacheUseCase(
         this.logger,
         this.delayFetchAgainTimeMs,
-        primaryCacheAdapter,
+        this.cacheGwAdapters,
         fetchDataUseCase
       );
 

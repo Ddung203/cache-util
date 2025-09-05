@@ -3,62 +3,119 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.CacheUseCase = void 0;
 const sleep_util_1 = require("../utils/sleep.util");
 class CacheUseCase {
-    constructor(logger, delayFetchAgainTimeMs, cacheGatewayAdapter, fetchDataUseCase) {
+    constructor(logger, delayFetchAgainTimeMs, cacheGatewayAdapters, // Mảng adapters
+    fetchDataUseCase) {
         this.logger = logger;
         this.delayFetchAgainTimeMs = delayFetchAgainTimeMs;
-        this.cacheGatewayAdapter = cacheGatewayAdapter;
+        this.cacheGatewayAdapters = cacheGatewayAdapters;
         this.fetchDataUseCase = fetchDataUseCase;
     }
     genReqId() {
         return Math.random().toString(36).substring(2, 15);
     }
     async getData(key, ttlSeconds) {
+        this.validateTtlOrdering(ttlSeconds);
         const reqId = this.genReqId();
-        const context = `${this.cacheGatewayAdapter.getName()}-${reqId}`;
-        this.logger.log(`Getting data for key: ${key}`, context);
-        // Check if data exists in cache
-        const cachedData = await this.cacheGatewayAdapter.getData(key);
-        if (cachedData) {
-            this.logger.log(`Cache hit for key: ${key}`, context);
-            return cachedData;
+        // Try each cache level in order (Memory -> Redis -> ...)
+        for (let i = 0; i < this.cacheGatewayAdapters.length; i++) {
+            const adapter = this.cacheGatewayAdapters[i];
+            const context = `${adapter.getName()}-${reqId}`;
+            this.logger.log(`Getting data for key: ${key}`, context);
+            const cachedData = await adapter.getData(key);
+            if (cachedData) {
+                this.logger.log(`Cache hit for key: ${key}`, context);
+                // Backfill higher-level caches
+                await this.backfillHigherLevelCaches(key, cachedData, ttlSeconds, i);
+                return cachedData;
+            }
+            this.logger.log(`Cache miss for key: ${key}`, context);
         }
-        this.logger.log(`Cache miss for key: ${key}`, context);
-        // Check if another process is already fetching the data
-        const isLocking = await this.cacheGatewayAdapter.checkIsLocking(key);
-        if (isLocking) {
-            this.logger.log(`Key ${key} is locked, waiting...`, context);
-            // Wait and retry
+        // All cache levels missed, fetch fresh data
+        return await this.fetchFreshData(key, ttlSeconds, reqId);
+    }
+    async backfillHigherLevelCaches(key, data, ttlSeconds, currentLevel) {
+        // Backfill caches at higher levels (lower index)
+        for (let i = 0; i < currentLevel; i++) {
+            // Use specific TTL for each level, fallback to last TTL if not enough provided
+            const ttl = i < ttlSeconds.length
+                ? ttlSeconds[i]
+                : ttlSeconds[ttlSeconds.length - 1];
+            await this.cacheGatewayAdapters[i].setData(key, data, ttl);
+        }
+    }
+    async fetchFreshData(key, ttlSeconds, reqId) {
+        const primaryAdapter = this.cacheGatewayAdapters[0];
+        const context = `${primaryAdapter.getName()}-${reqId}`;
+        // Handle locking with retry mechanism
+        const maxRetries = 3;
+        let retryCount = 0;
+        while ((await primaryAdapter.checkIsLocking(key)) &&
+            retryCount < maxRetries) {
+            this.logger.log(`Key ${key} is locked, waiting... (retry ${retryCount + 1}/${maxRetries})`, context);
             await (0, sleep_util_1.sleep)(this.delayFetchAgainTimeMs);
-            // Check cache again after waiting
-            const dataAfterWait = await this.cacheGatewayAdapter.getData(key);
-            if (dataAfterWait) {
-                this.logger.log(`Data found after wait for key: ${key}`, context);
-                return dataAfterWait;
+            retryCount++;
+            // Try all cache levels again after each wait
+            for (const adapter of this.cacheGatewayAdapters) {
+                const dataAfterWait = await adapter.getData(key);
+                if (dataAfterWait) {
+                    this.logger.log(`Data found after wait for key: ${key}`, context);
+                    return dataAfterWait;
+                }
             }
         }
-        // Set lock to prevent other processes from fetching the same data
-        const lockKey = key;
+        // If still locked after max retries, proceed anyway (lock might be stale)
+        if (retryCount >= maxRetries &&
+            (await primaryAdapter.checkIsLocking(key))) {
+            this.logger.log(`Lock timeout for key: ${key}, proceeding anyway`, context);
+        }
+        // Set lock on primary adapter
         const lockTtl = Math.max(...ttlSeconds);
-        await this.cacheGatewayAdapter.setData(`LOCK_${lockKey}`, reqId, lockTtl);
+        await primaryAdapter.setData(`LOCK_${key}`, reqId, lockTtl);
         try {
             this.logger.log(`Fetching data for key: ${key}`, context);
-            // Fetch data using the provided use case
             const freshData = await this.fetchDataUseCase.getData(key, ttlSeconds);
-            // Store in each cache level with different TTLs
-            for (let i = 0; i < ttlSeconds.length; i++) {
-                await this.cacheGatewayAdapter.setData(key, freshData, ttlSeconds[i]);
+            // Store in all cache levels with respective TTLs
+            for (let i = 0; i < this.cacheGatewayAdapters.length; i++) {
+                // Use specific TTL for each level, fallback to last TTL if not enough provided
+                const ttl = i < ttlSeconds.length
+                    ? ttlSeconds[i]
+                    : ttlSeconds[ttlSeconds.length - 1];
+                await this.cacheGatewayAdapters[i].setData(key, freshData, ttl);
             }
             this.logger.log(`Data cached for key: ${key}`, context);
             return freshData;
         }
-        catch (error) {
-            this.logger.log(`Error fetching data for key ${key}: ${error}`, context);
-            throw error;
-        }
         finally {
-            // Clear lock
-            await this.cacheGatewayAdapter.clearLock(lockKey);
+            await primaryAdapter.clearLock(key);
             this.logger.log(`Lock cleared for key: ${key}`, context);
+        }
+    }
+    validateTtlOrdering(ttlSeconds) {
+        // Validate basic requirements
+        if (ttlSeconds.length === 0) {
+            throw new Error('TTL array cannot be empty');
+        }
+        if (this.cacheGatewayAdapters.length === 0) {
+            throw new Error('At least one cache adapter must be registered');
+        }
+        // Validate array lengths compatibility
+        if (ttlSeconds.length > this.cacheGatewayAdapters.length) {
+            throw new Error(`TTL array length (${ttlSeconds.length}) cannot exceed ` +
+                `number of registered cache adapters (${this.cacheGatewayAdapters.length})`);
+        }
+        // Validate TTL values are positive
+        for (let i = 0; i < ttlSeconds.length; i++) {
+            if (ttlSeconds[i] <= 0) {
+                throw new Error(`TTL at index ${i} must be greater than 0, got: ${ttlSeconds[i]}`);
+            }
+        }
+        // Validate ascending order (only if multiple levels)
+        for (let i = 1; i < ttlSeconds.length; i++) {
+            if (ttlSeconds[i] < ttlSeconds[i - 1]) {
+                throw new Error(`Invalid TTL ordering: Cache level ${i} TTL (${ttlSeconds[i]}s) ` +
+                    `must be greater than or equal to level ${i - 1} TTL (${ttlSeconds[i - 1]}s). ` +
+                    `TTL should increase with each cache level for proper fallback behavior.`);
+            }
         }
     }
 }

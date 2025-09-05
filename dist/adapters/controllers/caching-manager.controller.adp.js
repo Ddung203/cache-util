@@ -13,9 +13,7 @@ class CachingManagerControllerAdp {
     async getData(key, ttlSeconds, fetchDataPromise) {
         try {
             const fetchDataUseCase = this.buildFetchDataUseCase(fetchDataPromise);
-            // Use the first cache adapter as primary
-            const primaryCacheAdapter = this.cacheGwAdapters[0];
-            const cacheUseCase = new useCases_1.CacheUseCase(this.logger, this.delayFetchAgainTimeMs, primaryCacheAdapter, fetchDataUseCase);
+            const cacheUseCase = new useCases_1.CacheUseCase(this.logger, this.delayFetchAgainTimeMs, this.cacheGwAdapters, fetchDataUseCase);
             const result = await cacheUseCase.getData(key, ttlSeconds);
             if (this.autoParseJsonString) {
                 const [error, parsedResult] = this.jsonParserUtil.parse(result);
