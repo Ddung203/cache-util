@@ -1,7 +1,7 @@
 {
   "name": "cache-util",
-  "version": "1.0.1",
-  "license": "MIT",
+  "version": "1.0.2",
+  "license": "",
   "author": "Ddung203",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -45,10 +45,8 @@ export class RedisGwAdp implements ICacheGwAdp {
       redisOptions.name = config.connection.name;
     }
 
-    this.cachingInstance = await caching({
-      store: redisStore,
-      ...redisOptions,
-    });
+    const store = await redisStore(redisOptions);
+    this.cachingInstance = await caching(store);
   }
 
   private async waitIsReady(): Promise<void> {

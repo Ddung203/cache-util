@@ -32,10 +32,8 @@ class RedisGwAdp {
             redisOptions.sentinels = config.connection.sentinels;
             redisOptions.name = config.connection.name;
         }
-        this.cachingInstance = await (0, cache_manager_1.caching)({
-            store: cache_manager_ioredis_yet_1.redisStore,
-            ...redisOptions,
-        });
+        const store = await (0, cache_manager_ioredis_yet_1.redisStore)(redisOptions);
+        this.cachingInstance = await (0, cache_manager_1.caching)(store);
     }
     async waitIsReady() {
         await this.isReadyPromise;
